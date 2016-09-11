@@ -1,0 +1,25 @@
+[package]
+name = "abstract_art"
+version = "0.1.0"
+authors = ["Colin Kinloch <colin@kinlo.ch>"]
+build = "build.rs"
+
+[package.metadata.android]
+label = "Abstract Art"
+res = "res"
+#icon = "@mipmap/ic_launcher"
+
+[dependencies]
+vulkano = { git = "https://github.com/tomaka/vulkano" }
+vulkano-win = { git = "https://github.com/tomaka/vulkano" }
+
+getopts = "0.2"
+
+winit = "0.5"
+rand = "0.3"
+
+android_glue = "0.2"
+
+[build-dependencies]
+vk-sys = { git = "https://github.com/tomaka/vulkano" }
+vulkano-shaders = { git = "https://github.com/tomaka/vulkano" }
