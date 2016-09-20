@@ -275,7 +275,6 @@ impl Layer {
             }
         }
 
-        println!("{:?}", layer.distortions);
         Ok(layer)
     }
 }

@@ -520,7 +520,7 @@ fn main() {
 
     let (map_texture, palette_texture) = {
         use vulkano::image::immutable::ImmutableImage;
-        use vulkano::image::sys::Dimensions;
+        use vulkano::image::Dimensions;
         use vulkano::format::{R8Unorm, B5G5R5A1UnormPack16};
         (ImmutableImage::new(&device,
                              Dimensions::Dim2d {
@@ -720,14 +720,18 @@ fn main() {
 
     let mut command_buffers = build_command_buffers(state, &framebuffers);
 
+    let mut submissions: Vec<Arc<vulkano::command_buffer::Submission>> = Vec::new();
+
     'run: loop {
+        submissions.retain(|s| s.destroying_would_block());
+        
         {
-            let mut mapping = global_buffer.write(Duration::new(0, 0)).unwrap();
+            let mut mapping = global_buffer.write(Duration::new(1, 0)).unwrap();
             mapping.time = get_time();
         }
 
-        let image_num = swapchain.acquire_next_image(Duration::new(10, 0)).unwrap();
-        vulkano::command_buffer::submit(&command_buffers[image_num], &queue).unwrap();
+        let image_num = swapchain.acquire_next_image(Duration::from_millis(1)).unwrap();
+        submissions.push(vulkano::command_buffer::submit(&command_buffers[image_num], &queue).unwrap());
         swapchain.present(&queue, image_num).unwrap();
 
         let mut fullscreen_toggle = fullscreen;

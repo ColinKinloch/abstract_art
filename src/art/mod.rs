@@ -34,8 +34,6 @@ pub const PALETTE_MAX: u16 = 0x10;
 pub const MAP_WIDTH: u32 = 256;
 pub const MAP_HEIGHT: u32 = 256;
 
-use std::ops::Sub;
-
 // TODO: Implement wipe?
 
 // TODO: Rename these?
