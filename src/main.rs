@@ -33,14 +33,14 @@ use std::i16;
 mod renderpass {
     single_pass_renderpass!{
     attachments: {
-      color: {
+      colour: {
         load: Clear,
         store: Store,
         format: ::vulkano::format::A1R5G5B5UnormPack16,
       }
     },
     pass: {
-      color: [color],
+      color: [colour],
       depth_stencil: {}
     }
   }
@@ -87,7 +87,7 @@ fn create_swapchain(device: &Arc<vulkano::device::Device>,
 
     let framebuffers = images.iter()
         .map(|image| {
-            let attachments = renderpass::AList { color: &image };
+            let attachments = renderpass::AList { colour: &image };
 
             vulkano::framebuffer::Framebuffer::new(&renderpass,
                                                    [images[0].dimensions()[0],
@@ -270,7 +270,7 @@ fn main() {
 
     let renderpass = renderpass::CustomRenderPass::new(&device,
                                                        &renderpass::Formats {
-                                                           color: (vulkano::format::A1R5G5B5UnormPack16,
+                                                           colour: (vulkano::format::A1R5G5B5UnormPack16,
                                                                    1),
                                                        })
         .unwrap();
@@ -511,11 +511,11 @@ fn main() {
     let layer_framebuffers =
         [vulkano::framebuffer::Framebuffer::new(&renderpass,
                                                 [art::MAP_WIDTH, art::MAP_HEIGHT, 1],
-                                                renderpass::AList { color: &art_tex[0] })
+                                                renderpass::AList { colour: &art_tex[0] })
              .unwrap(),
          vulkano::framebuffer::Framebuffer::new(&renderpass,
                                                 [art::MAP_WIDTH, art::MAP_HEIGHT, 1],
-                                                renderpass::AList { color: &art_tex[1] })
+                                                renderpass::AList { colour: &art_tex[1] })
              .unwrap()];
 
     let (map_texture, palette_texture) = {
@@ -701,7 +701,7 @@ fn main() {
                     [palette_texture.dimensions().width(), palette_texture.dimensions().height(), 1])
                 // Layer 1
                 .draw_inline(&renderpass, &layer_framebuffer, renderpass::ClearValues {
-                    color: [0.0, 0.0, 0.0, 0.0]
+                    colour: [0.0, 0.0, 0.0, 0.0]
                 })
                 .draw(&art_pipeline, &vertex_buffer,
                     &DynamicState::none(), layer_set, &())
@@ -710,7 +710,7 @@ fn main() {
         command_buffer
             // Compose
             .draw_inline(&renderpass, &framebuffer, renderpass::ClearValues {
-                color: [0.0, 0.0, 0.0, 1.0]
+                colour: [0.0, 0.0, 0.0, 1.0]
             })
             .draw(&pipeline, &vertex_buffer, &state, &set, &())
             .draw_end()
