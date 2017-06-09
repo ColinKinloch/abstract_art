@@ -30,21 +30,21 @@ use std::i16;
 //#[cfg(target_os = "android")]
 //android_start!(main);
 
-mod renderpass {
-    single_pass_renderpass!{
-    attachments: {
-      colour: {
-        load: Clear,
-        store: Store,
-        format: ::vulkano::format::A1R5G5B5UnormPack16,
-      }
-    },
-    pass: {
-      color: [colour],
-      depth_stencil: {}
-    }
-  }
-}
+//mod renderpass {
+//    single_pass_renderpass!{
+//    attachments: {
+//      colour: {
+//        load: Clear,
+//        store: Store,
+//        format: ::vulkano::format::A1R5G5B5UnormPack16,
+//      }
+//    },
+//    pass: {
+//      color: [colour],
+//      depth_stencil: {}
+//    }
+//  }
+//}
 
 /// # Here
 ///
@@ -53,15 +53,14 @@ mod renderpass {
 ///
 /// Here is a title, Maybe this?
 /// Creates a swapchain and framebuffers
-fn create_swapchain(device: &Arc<vulkano::device::Device>,
-                    surface: &Arc<vulkano::swapchain::Surface>,
+fn create_swapchain(device: Arc<vulkano::device::Device>,
+                    surface: Arc<vulkano::swapchain::Surface>,
                     caps: &vulkano::swapchain::Capabilities,
-                    renderpass: &Arc<renderpass::CustomRenderPass>,
                     sharing: vulkano::sync::SharingMode,
                     dimensions: [u32; 2],
                     old_swapchain: Option<&Arc<vulkano::swapchain::Swapchain>>)
                     -> (Arc<vulkano::swapchain::Swapchain>,
-                        Vec<Arc<vulkano::framebuffer::Framebuffer<renderpass::CustomRenderPass>>>) {
+                        Vec<Arc<vulkano::image::swapchain::SwapchainImage>>) {
     let (swapchain, images) = {
         use vulkano::swapchain::{Swapchain, SurfaceTransform, CompositeAlpha};
         use vulkano::format::B8G8R8A8Unorm;
@@ -69,13 +68,13 @@ fn create_swapchain(device: &Arc<vulkano::device::Device>,
         let present = caps.present_modes.iter().next().unwrap();
         let usage = caps.supported_usage_flags;
 
-        Swapchain::new(&device,
+        Swapchain::new(device,
                        surface,
-                       2,
+                       caps.min_image_count,
                        B8G8R8A8Unorm,
                        dimensions,
                        1,
-                       &usage,
+                       usage,
                        sharing,
                        SurfaceTransform::Identity,
                        CompositeAlpha::Opaque,
@@ -85,23 +84,22 @@ fn create_swapchain(device: &Arc<vulkano::device::Device>,
             .expect("failed to create swapchain")
     };
 
+    (swapchain, images)
+}
+fn create_framebuffers<Rp: vulkano::framebuffer::RenderPassAbstract>(renderpass: Arc<Rp>,
+                       images: Vec<Arc<vulkano::image::swapchain::SwapchainImage>>
+                   ) -> Vec<Arc<vulkano::framebuffer::Framebuffer<Arc<Rp>, ((), std::sync::Arc<vulkano::image::SwapchainImage>)>>> {
     let framebuffers = images.iter()
         .map(|image| {
-            let attachments = renderpass::AList { colour: &image };
-
-            vulkano::framebuffer::Framebuffer::new(&renderpass,
-                                                   [images[0].dimensions()[0],
-                                                    images[0].dimensions()[1],
-                                                    1],
-                                                   attachments)
-                .unwrap()
+            Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass)
+                .add(image.clone()).unwrap()
+                .build().unwrap())
         })
         .collect::<Vec<_>>();
-
-    (swapchain, framebuffers)
+    framebuffers
 }
 
-fn build_window(instance: &Arc<vulkano::instance::Instance>, fullscreen: bool, resolution: [u32; 2]) -> vulkano_win::Window {
+fn build_window(events_loop: &winit::EventsLoop, instance: &Arc<vulkano::instance::Instance>, fullscreen: bool, resolution: [u32; 2]) -> vulkano_win::Window {
   let mut window = winit::WindowBuilder::new()
     .with_title("Abstract Art".to_string())
     .with_dimensions(resolution[0], resolution[1]);
@@ -109,9 +107,9 @@ fn build_window(instance: &Arc<vulkano::instance::Instance>, fullscreen: bool, r
   if fullscreen {
     window = window.with_fullscreen(winit::get_primary_monitor())
   }
-  
+  let events_loop = winit::EventsLoop::new();
   window
-    .build_vk_surface(&instance)
+    .build_vk_surface(&events_loop, instance.clone())
     .unwrap()
 }
 
@@ -245,11 +243,12 @@ fn main() {
              physical.name(),
              physical.ty());
 
+    let events_loop = winit::EventsLoop::new();
     let mut fullscreen = false;
-    let mut window = build_window(&instance, fullscreen, dimensions);
+    let mut window = build_window(&events_loop, &instance, fullscreen, dimensions);
 
     let queue = physical.queue_families()
-        .find(|q| q.supports_graphics() && window.surface().is_supported(q).unwrap_or(false))
+        .find(|q| q.supports_graphics() && window.surface().is_supported(*q).unwrap_or(false))
         .expect("couldn't find a graphical queue family");
 
     let device_ext = vulkano::device::DeviceExtensions {
@@ -268,21 +267,37 @@ fn main() {
         .expect("failed to get surface capabilities");
     //dimensions = caps.current_extent.unwrap_or(dimensions);
 
-    let renderpass = renderpass::CustomRenderPass::new(&device,
-                                                       &renderpass::Formats {
-                                                           colour: (vulkano::format::A1R5G5B5UnormPack16,
-                                                                   1),
-                                                       })
-        .unwrap();
+    //let renderpass = renderpass::CustomRenderPass::new(&device,
+    //                                                   &renderpass::Formats {
+    //                                                       colour: (vulkano::format::A1R5G5B5UnormPack16,
+    //                                                               1),
+    //                                                   })
+    //    .unwrap();
 
-    let (mut swapchain, mut framebuffers) =
-        create_swapchain(&device,
-                         &window.surface(),
+    let (mut swapchain, mut images) =
+        create_swapchain(device,
+                         window.surface().clone(),
                          &caps,
-                         &renderpass,
                          vulkano::sync::SharingMode::from(&queue),
                          dimensions,
                          None);
+    
+    let renderpass = Arc::new(single_pass_renderpass!(device.clone(),
+        attachments: {
+            colour: {
+                load: Clear,
+                store: Store,
+                format: swapchain.format(),
+                samples: 1,
+            }
+        },
+        pass: {
+          color: [colour],
+          depth_stencil: {}
+        }
+    ).unwrap());
+    
+    let mut framebuffers = create_framebuffers(renderpass.clone(), images);
 
     let vertex_buffer = {
         use vulkano::buffer::cpu_access::CpuAccessibleBuffer;
@@ -294,8 +309,8 @@ fn main() {
         }
         impl_vertex!(Vertex, position);
 
-        CpuAccessibleBuffer::from_iter(&device,
-                                       &BufferUsage::vertex_buffer(),
+        CpuAccessibleBuffer::from_iter(device.clone(),
+                                       BufferUsage::vertex_buffer(),
                                        Some(queue.family()),
                                        [Vertex { position: [0., 0.] },
                                         Vertex { position: [4., 0.] },
@@ -319,45 +334,75 @@ fn main() {
       distortions: Arc<vulkano::buffer::cpu_access::CpuAccessibleBuffer<aa_fs::ty::Distortions>>
     };
     impl LayerBufferSet {
-        fn new(device: &Arc<vulkano::device::Device>,
+        fn new(device: Arc<vulkano::device::Device>,
                queue_family: vulkano::instance::QueueFamily)
                -> LayerBufferSet {
-            use art::aa_fs::ty::{PaletteCycles, Translations, Distortions};
+            use art::aa_fs::ty::{PaletteCycles, PaletteCycle, Translations, Translation, Distortions, Distortion};
             use vulkano::buffer::cpu_access::CpuAccessibleBuffer;
             use vulkano::buffer::BufferUsage;
 
             LayerBufferSet {
-          map: CpuAccessibleBuffer::from_data(&device,
-                                              &BufferUsage::uniform_buffer(),
+          map: CpuAccessibleBuffer::from_data(device.clone(),
+                                              BufferUsage::uniform_buffer(),
                                               Some(queue_family),
                                               [[0; 1]; (art::MAP_WIDTH * art::MAP_HEIGHT) as usize])
                .expect("failed to create buffer"),
-          palette: CpuAccessibleBuffer::from_data(&device,
-                                                  &BufferUsage::uniform_buffer(),
+          palette: CpuAccessibleBuffer::from_data(device.clone(),
+                                                  BufferUsage::uniform_buffer(),
                                                   Some(queue_family),
                                                   [[0; 1]; 8 * art::PALETTE_MAX as usize])
                    .expect("failed to create palette buffer"),
-            palette_cycles: CpuAccessibleBuffer::<PaletteCycles>::from_data(&device,
-                                                         &BufferUsage::uniform_buffer(),
+            palette_cycles: CpuAccessibleBuffer::<PaletteCycles>::from_data(device.clone(),
+                                                         BufferUsage::uniform_buffer(),
                                                          Some(queue_family),
-                                                         Default::default())
+                                                         PaletteCycles {
+                                                             cycles: [PaletteCycle{
+                                                                 start: 0.,
+                                                                 end: 0.,
+                                                                 _dummy0: [0; 8]
+                                                             }; 2],
+                                                             style: 0,
+                                                             speed: 0.,
+                                                             _dummy0: [0; 8],
+                                                         })
                                                          .expect("failed to create buffer"),
-            translations: CpuAccessibleBuffer::<Translations>::from_data(&device,
-                                                         &BufferUsage::uniform_buffer(),
+            translations: CpuAccessibleBuffer::<Translations>::from_data(device.clone(),
+                                                         BufferUsage::uniform_buffer(),
                                                          Some(queue_family),
-                                                         Default::default())
+                                                        Translations {
+                                                            translations: [Translation {
+                                                                acceleration: [0.; 2],
+                                                                duration: 0.,
+                                                                velocity: [0.; 2],
+                                                                _dummy0: [0; 4],
+                                                                _dummy1: [0; 8]
+                                                            }; 4],
+                                                        })
                                                          .expect("failed to create buffer"),
-            distortions: CpuAccessibleBuffer::<Distortions>::from_data(&device,
-                                                         &BufferUsage::uniform_buffer(),
+            distortions: CpuAccessibleBuffer::<Distortions>::from_data(device.clone(),
+                                                         BufferUsage::uniform_buffer(),
                                                          Some(queue_family),
-                                                         Default::default())
+                                                         Distortions {
+                                                             distortions: [Distortion {
+                                                                 amplitude: 0.,
+                                                                 amplitude_delta: 0.,
+                                                                 compression: 0.,
+                                                                 compression_delta: 0.,
+                                                                 duration: 0.,
+                                                                 frequency: 0.,
+                                                                 frequency_delta: 0.,
+                                                                 speed: 0.,
+                                                                 style: 0,
+                                                                 _dummy0: [0; 12]
+                                                             }; 4],
+                                                         })
                                                          .expect("failed to create buffer")
         }
         }
     };
 
-    let global_buffer = vulkano::buffer::cpu_access::CpuAccessibleBuffer::from_data(&device,
-                                        &vulkano::buffer::BufferUsage::uniform_buffer(),
+    let global_buffer = vulkano::buffer::cpu_access::CpuAccessibleBuffer::from_data(device.clone(),
+                                        vulkano::buffer::BufferUsage::uniform_buffer(),
                                         Some(queue.family()),
                                         aa_fs::ty::Globals {
                                             time: get_time(),
@@ -366,8 +411,8 @@ fn main() {
                                         })
             .expect("failed to create buffer");
 
-    let layer_buffers = [LayerBufferSet::new(&device, queue.family()),
-                         LayerBufferSet::new(&device, queue.family())];
+    let layer_buffers = [LayerBufferSet::new(device.clone(), queue.family()),
+                         LayerBufferSet::new(device.clone(), queue.family())];
 
     let draw_vs = draw_vs::Shader::load(&device).expect("failed to create shader module");
     let aa_fs = aa_fs::Shader::load(&device).expect("failed to create shader module");
@@ -387,14 +432,14 @@ fn main() {
         for (buffers, layer) in layer_buffers.iter().zip(bg.layers.iter()) {
             // Write map
             {
-                let mut mapping = buffers.map.write(Duration::new(0, 0)).unwrap();
+                let mut mapping = buffers.map.write().unwrap();
                 for (o, i) in mapping.iter_mut().zip(layer.map.iter()) {
                     o[0] = *i;
                 }
             }
             // Write palette
             {
-                let mut mapping = buffers.palette.write(Duration::new(0, 0)).unwrap();
+                let mut mapping = buffers.palette.write().unwrap();
                 for (o, i) in mapping.iter_mut().zip(layer.palettes[0].iter()) {
                     o[0] = *i;
                 }
@@ -407,7 +452,7 @@ fn main() {
             }
             // Write palette cycle
             {
-                let mut mapping = buffers.palette_cycles.write(Duration::new(0, 0)).unwrap();
+                let mut mapping = buffers.palette_cycles.write().unwrap();
                 // This is frameskip?
                 // TODO Figure out why multiplyier
                 mapping.speed = 7.55 * (1 + layer.speed) as f32;//(1. / ((1 + layer.speed) as f64 * 6.)) as f32;
@@ -418,7 +463,7 @@ fn main() {
             }
             // Write translations
             {
-                let mut mapping = buffers.translations.write(Duration::new(0, 0)).unwrap();
+                let mut mapping = buffers.translations.write().unwrap();
                 let c1 = fps / art::MAP_WIDTH as f32;
                 for (l, m) in layer.translations.iter().zip(mapping.translations.iter_mut()) {
                     match l {
@@ -446,7 +491,7 @@ fn main() {
                 const C1: f64 = 1. / 512.;
                 const C2: f64 = f64::consts::PI / i16::MAX as f64;
                 const C3: f64 = f64::consts::PI / 60.;
-                let mut mapping = buffers.distortions.write(Duration::new(0, 0)).unwrap();
+                let mut mapping = buffers.distortions.write().unwrap();
                 for (l, m) in layer.distortions.iter().zip(mapping.distortions.iter_mut()) {
                     match l {
                         &Some(ref l) => {
@@ -491,7 +536,7 @@ fn main() {
 
     // TODO: Rename all these
     // TODO: Consider alternative format?
-    let gen_tex = || vulkano::image::attachment::AttachmentImage::new(&device,
+    let gen_tex = || vulkano::image::attachment::AttachmentImage::new(device.clone(),
                                                        [art::MAP_WIDTH,
                                                         art::MAP_HEIGHT],
                                                         vulkano::format::A1R5G5B5UnormPack16).unwrap();
@@ -509,20 +554,22 @@ fn main() {
 
     // TODO: do this good
     let layer_framebuffers =
-        [vulkano::framebuffer::Framebuffer::new(&renderpass,
-                                                [art::MAP_WIDTH, art::MAP_HEIGHT, 1],
-                                                renderpass::AList { colour: &art_tex[0] })
-             .unwrap(),
-         vulkano::framebuffer::Framebuffer::new(&renderpass,
-                                                [art::MAP_WIDTH, art::MAP_HEIGHT, 1],
-                                                renderpass::AList { colour: &art_tex[1] })
-             .unwrap()];
+        [vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+            //.with_dimensions([art::MAP_WIDTH, art::MAP_HEIGHT, 1])
+            .add(art_tex[0].clone()).unwrap()
+            .build()
+            .unwrap(),
+         vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+            //.with_dimensions([art::MAP_WIDTH, art::MAP_HEIGHT, 1])
+            .add(art_tex[1].clone()).unwrap()
+            .build()
+            .unwrap()];
 
     let (map_texture, palette_texture) = {
         use vulkano::image::immutable::ImmutableImage;
         use vulkano::image::Dimensions;
         use vulkano::format::{R8Unorm, B5G5R5A1UnormPack16};
-        (ImmutableImage::new(&device,
+        (ImmutableImage::new(device.clone(),
                              Dimensions::Dim2d {
                                  width: art::MAP_WIDTH,
                                  height: art::MAP_HEIGHT,
@@ -530,7 +577,7 @@ fn main() {
                              R8Unorm,
                              Some(queue.family()))
             .unwrap(),
-         ImmutableImage::new(&device,
+         ImmutableImage::new(device.clone(),
                              Dimensions::Dim2d {
                                  width: art::PALETTE_MAX as u32,
                                  height: 8,
@@ -542,7 +589,7 @@ fn main() {
 
     let (map_sampler, palette_sampler) = {
         use vulkano::sampler::{Sampler, Filter, MipmapMode, SamplerAddressMode};
-        (Sampler::new(&device,
+        (Sampler::new(device.clone(),
                       Filter::Nearest,
                       Filter::Nearest,
                       MipmapMode::Nearest,
@@ -554,7 +601,7 @@ fn main() {
                       0.0,
                       0.0)
             .unwrap(),
-         Sampler::new(&device,
+         Sampler::new(device.clone(),
                       Filter::Nearest,
                       Filter::Nearest,
                       MipmapMode::Nearest,
@@ -568,58 +615,23 @@ fn main() {
             .unwrap())
     };
 
-    let art_descriptor_pool = vulkano::descriptor::descriptor_set::DescriptorPool::new(&device);
-    mod art_pipeline_layout {
-        pipeline_layout!{
-            set0: {
-                map: CombinedImageSampler,
-                palette: CombinedImageSampler,
-                global: UniformBuffer<::art::aa_fs::ty::Globals>,
-                pc: UniformBuffer<::art::aa_fs::ty::PaletteCycles>,
-                translations: UniformBuffer<::art::aa_fs::ty::Translations>,
-                distortions: UniformBuffer<::art::aa_fs::ty::Distortions>
-            }
-        }
-    }
-    let art_pipeline_layout = art_pipeline_layout::CustomPipeline::new(&device).unwrap();
-
-    let layer_sets = layer_buffers.iter()
-        .map(|buffers| {
-            art_pipeline_layout::set0::Set::new(&art_descriptor_pool,
-                                                &art_pipeline_layout,
-                                                &art_pipeline_layout::set0::Descriptors {
-                                                    map: (&map_sampler, &map_texture),
-                                                    palette: (&palette_sampler, &palette_texture),
-                                                    global: &global_buffer,
-                                                    pc: &buffers.palette_cycles,
-                                                    translations: &buffers.translations,
-                                                    distortions: &buffers.distortions,
-                                                })
-        })
-        .collect::<Vec<_>>();
-
-
-    let descriptor_pool = vulkano::descriptor::descriptor_set::DescriptorPool::new(&device);
-    mod pipeline_layout {
-        pipeline_layout!{
-      set0: {
-        bg3: CombinedImageSampler,
-        bg4: CombinedImageSampler
-      }
-    }
-    }
-
-    let pipeline_layout = pipeline_layout::CustomPipeline::new(&device).unwrap();
-    let set = pipeline_layout::set0::Set::new(&descriptor_pool,
-                                              &pipeline_layout,
-                                              &pipeline_layout::set0::Descriptors {
-                                                  bg3: (&map_sampler, &art_tex[0]),
-                                                  bg4: (&map_sampler, &art_tex[1]),
-                                              });
+    //mod art_pipeline_layout {
+    //    pipeline_layout!{
+    //        set0: {
+    //            map: CombinedImageSampler,
+    //            palette: CombinedImageSampler,
+    //            global: UniformBuffer<::art::aa_fs::ty::Globals>,
+    //            pc: UniformBuffer<::art::aa_fs::ty::PaletteCycles>,
+    //            translations: UniformBuffer<::art::aa_fs::ty::Translations>,
+    //            distortions: UniformBuffer<::art::aa_fs::ty::Distortions>
+    //        }
+    //    }
+    //}
+    //let art_pipeline_layout = art_pipeline_layout::CustomPipeline::new(&device).unwrap();
 
     let art_pipeline = {
         let dim = map_texture.dimensions().width_height();
-        vulkano::pipeline::GraphicsPipeline::new(&device,
+        Arc::new(vulkano::pipeline::GraphicsPipeline::new(device.clone(),
       vulkano::pipeline::GraphicsPipelineParams {
         vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
         vertex_shader: draw_vs.main_entry_point(),
@@ -644,14 +656,107 @@ fn main() {
         fragment_shader: aa_fs.main_entry_point(),
         depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
         blend: vulkano::pipeline::blend::Blend::pass_through(),
-        layout: &art_pipeline_layout,
-        render_pass: vulkano::framebuffer::Subpass::from(&renderpass, 0).unwrap(),
+        //layout: &art_pipeline_layout,
+        render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
       }
-    ).unwrap()
+        ).unwrap())
     };
 
-    let pipeline = {
-      vulkano::pipeline::GraphicsPipeline::new(&device, vulkano::pipeline::GraphicsPipelineParams {
+    let layer_sets = layer_buffers.iter()
+        .map(|buffers| {
+            Arc::new(simple_descriptor_set!(art_pipeline.clone(), 0, {
+                map: (map_texture.clone(), map_sampler.clone()),
+                palette: (palette_texture.clone(), palette_sampler.clone()),
+                global: global_buffer.clone(),
+                pc: buffers.palette_cycles.clone(),
+                translations: buffers.translations.clone(),
+                distortions: buffers.distortions.clone(),
+            }))
+        })
+        .collect::<Vec<_>>();
+
+
+    //let descriptor_pool = vulkano::descriptor::descriptor_set::DescriptorPool::new(&device);
+    //mod pipeline_layout {
+    //    pipeline_layout! {
+    //        set0: {
+    //            bg3: CombinedImageSampler,
+    //            bg4: CombinedImageSampler
+    //        }
+    //    }
+    //}
+
+    //let pipeline_layout = pipeline_layout::CustomPipeline::new(&device).unwrap();
+    let compose_pipeline = Arc::new(
+        vulkano::pipeline::GraphicsPipeline::new(device.clone(), vulkano::pipeline::GraphicsPipelineParams {
+            vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
+            vertex_shader: draw_vs.main_entry_point(),
+            input_assembly: vulkano::pipeline::input_assembly::InputAssembly {
+              topology: vulkano::pipeline::input_assembly::PrimitiveTopology::TriangleStrip,
+              primitive_restart_enable: false,
+            },
+            tessellation: None,
+            geometry_shader: None,
+            viewport: vulkano::pipeline::viewport::ViewportsState::DynamicViewports {
+              scissors: vec![
+                vulkano::pipeline::viewport::Scissor::irrelevant()
+              ],
+            },
+            raster: Default::default(),
+            multisample: vulkano::pipeline::multisample::Multisample::disabled(),
+            fragment_shader: compose_fs.main_entry_point(),
+            depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
+            blend: vulkano::pipeline::blend::Blend::pass_through(),
+            //layout: &pipeline_layout,
+            render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
+        }).unwrap()
+    );
+    //let set = pipeline_layout::set0::Set::new(&descriptor_pool,
+    //                                          &pipeline_layout,
+    //                                          &pipeline_layout::set0::Descriptors {
+    //                                              bg3: (&map_sampler, &art_tex[0]),
+    //                                              bg4: (&map_sampler, &art_tex[1]),
+    //                                          });
+    let set = Arc::new(simple_descriptor_set!(compose_pipeline.clone(), 0, {
+        bg3: (art_tex[0].clone(), map_sampler.clone()),
+        bg4: (art_tex[1].clone(), map_sampler.clone()),
+    }));
+
+    let art_pipeline = {
+        let dim = map_texture.dimensions().width_height();
+        Arc::new(vulkano::pipeline::GraphicsPipeline::new(device.clone(),
+      vulkano::pipeline::GraphicsPipelineParams {
+        vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
+        vertex_shader: draw_vs.main_entry_point(),
+        input_assembly: vulkano::pipeline::input_assembly::InputAssembly {
+            topology: vulkano::pipeline::input_assembly::PrimitiveTopology::TriangleStrip,
+            primitive_restart_enable: false,
+        },
+        tessellation: None,
+        geometry_shader: None,
+        viewport: vulkano::pipeline::viewport::ViewportsState::Fixed {
+          data: vec![(
+            vulkano::pipeline::viewport::Viewport {
+              origin: [0.0, 0.0],
+              depth_range: 0.0 .. 1.0,
+              dimensions: [dim[0] as f32, dim[1] as f32],
+            },
+            vulkano::pipeline::viewport::Scissor::irrelevant()
+          )]
+        },
+        raster: Default::default(),
+        multisample: vulkano::pipeline::multisample::Multisample::disabled(),
+        fragment_shader: aa_fs.main_entry_point(),
+        depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
+        blend: vulkano::pipeline::blend::Blend::pass_through(),
+        //layout: &art_pipeline_layout,
+        render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
+      }
+  ).unwrap())
+    };
+
+    /*let pipeline = {
+      vulkano::pipeline::GraphicsPipeline::new(device.clone(), vulkano::pipeline::GraphicsPipelineParams {
         vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
         vertex_shader: draw_vs.main_entry_point(),
         input_assembly: vulkano::pipeline::input_assembly::InputAssembly {
@@ -670,10 +775,10 @@ fn main() {
         fragment_shader: compose_fs.main_entry_point(),
         depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
         blend: vulkano::pipeline::blend::Blend::pass_through(),
-        layout: &pipeline_layout,
-        render_pass: vulkano::framebuffer::Subpass::from(&renderpass, 0).unwrap(),
+        //layout: &pipeline_layout,
+        render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
       }).unwrap()
-    };
+    };*/
 
     let mut state = {
         let dim: [f32; 2] = [dimensions[0] as f32, dimensions[1] as f32];
@@ -687,86 +792,112 @@ fn main() {
             line_width: None,
         }
     };
-
-    let build_command_buffers = |state, framebuffers: &Vec<Arc<vulkano::framebuffer::Framebuffer<renderpass::CustomRenderPass>>>| framebuffers.iter().map(|framebuffer| {
+    use vulkano::command_buffer::CommandBufferBuilder;
+    let build_command_buffers = |state: vulkano::command_buffer::DynamicState, framebuffers: &Vec<Arc<vulkano::framebuffer::Framebuffer<_, _>>>| framebuffers.iter().map(|framebuffer| {
         use vulkano::buffer::BufferSlice;
-        use vulkano::command_buffer::{PrimaryCommandBufferBuilder, DynamicState};
-        let mut command_buffer = PrimaryCommandBufferBuilder::new(&device, queue.family());
+        use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
+        let mut command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family()).unwrap();
         for ((buffers, layer_framebuffer), layer_set) in layer_buffers.iter().zip(layer_framebuffers.iter()).zip(layer_sets.iter()) {
             command_buffer = command_buffer
-                .copy_buffer_to_color_image(BufferSlice::from(&buffers.map), &map_texture, 0, 0 .. 1, [0, 0, 0],
-                    [map_texture.dimensions().width(), map_texture.dimensions().height(), 1])
-                .copy_buffer_to_color_image(BufferSlice::from(&buffers.palette),
-                    &palette_texture, 0, 0 .. 1, [0, 0, 0],
-                    [palette_texture.dimensions().width(), palette_texture.dimensions().height(), 1])
+                .copy_buffer_to_image(buffers.map.clone(), map_texture.clone()).unwrap()
+                //.copy_buffer_to_image(BufferSlice::from(&buffers.map), &map_texture, 0, 0 .. 1, [0, 0, 0],
+                //    [map_texture.dimensions().width(), map_texture.dimensions().height(), 1])
+                .copy_buffer_to_image(buffers.palette.clone(), palette_texture.clone()).unwrap()
+                //.copy_buffer_to_image(BufferSlice::from(&buffers.palette),
+                //    &palette_texture, 0, 0 .. 1, [0, 0, 0],
+                //    [palette_texture.dimensions().width(), palette_texture.dimensions().height(), 1])
                 // Layer 1
-                .draw_inline(&renderpass, &layer_framebuffer, renderpass::ClearValues {
-                    colour: [0.0, 0.0, 0.0, 0.0]
-                })
-                .draw(&art_pipeline, &vertex_buffer,
-                    &DynamicState::none(), layer_set, &())
-                .draw_end();
+                .begin_render_pass(layer_framebuffer.clone(), false,
+                    vec![
+                        [0.0, 0.0, 0.0, 0.0].into()
+                    ]
+                ).unwrap()
+                .draw(art_pipeline.clone(), DynamicState::none(),
+                    vertex_buffer.clone(), layer_set.clone(), ()).unwrap()
+                .end_render_pass().unwrap();
         }
         command_buffer
             // Compose
-            .draw_inline(&renderpass, &framebuffer, renderpass::ClearValues {
-                colour: [0.0, 0.0, 0.0, 1.0]
-            })
-            .draw(&pipeline, &vertex_buffer, &state, &set, &())
-            .draw_end()
+            .begin_render_pass(framebuffer.clone(), false,
+                vec![
+                    [0.0, 0.0, 0.0, 1.0].into()
+                ]
+            ).unwrap()
+            .draw(compose_pipeline.clone(), state.clone(),
+                vertex_buffer.clone(), set.clone(), ()).unwrap()
+            .end_render_pass().unwrap()
             
             .build()
     }).collect::<Vec<_>>();
 
     let mut command_buffers = build_command_buffers(state, &framebuffers);
 
-    let mut submissions: Vec<Arc<vulkano::command_buffer::Submission>> = Vec::new();
+    let mut previous_frame = Box::new(vulkano::sync::now(device.clone())) as Box<vulkano::sync::GpuFuture>;
 
-    'run: loop {
-        submissions.retain(|s| s.destroying_would_block());
+    let mut running = true;
+
+    while running {
+        previous_frame.cleanup_finished();
         
         {
-            let mut mapping = global_buffer.write(Duration::new(1, 0)).unwrap();
+            let mut mapping = global_buffer.write().unwrap();
             mapping.time = get_time();
         }
 
-        let image_num = swapchain.acquire_next_image(Duration::from_millis(1)).unwrap();
-        submissions.push(vulkano::command_buffer::submit(&command_buffers[image_num], &queue).unwrap());
-        swapchain.present(&queue, image_num).unwrap();
+        let (image_num, acquire_future) = vulkano::swapchain::acquire_next_image(swapchain.clone(),
+            Duration::new(2, 0)).unwrap();
+        
+        let future = previous_frame.join(acquire_future)
+            .then_execute(queue.clone(), command_buffers[image_num]).unwrap()
+            .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
+            .then_signal_fence_and_flush().unwrap();
+        
+        previous_frame = Box::new(future) as Box<_>;
+        //submissions.push(vulkano::command_buffer::submit(&command_buffers[image_num], &queue).unwrap());
+        //swapchain.present(&queue, image_num).unwrap();
 
         let mut fullscreen_toggle = fullscreen;
         let mut rebuild_swapchain = false;
         let mut use_old_swapchain = false;
 
-        for ev in window.window().poll_events() {
-            use winit::{Event, VirtualKeyCode, ElementState, MouseScrollDelta, TouchPhase};
-            match ev {
-                Event::Closed => break 'run,
-                Event::KeyboardInput(_, _, Some(VirtualKeyCode::Escape)) => break 'run,
-                Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::F11)) => fullscreen_toggle = !fullscreen_toggle,
-                Event::Resized(width, height) => {
-                    dimensions = [width, height];
-                    rebuild_swapchain = true;
-                    use_old_swapchain = true;
+        events_loop.poll_events(|event| {
+            use winit::{WindowEvent};
+            match event {
+                winit::Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::Closed => running = false,
+                    _ => (),
                 }
-                Event::MouseWheel(MouseScrollDelta::LineDelta(_, d), TouchPhase::Moved) => {
-                    change_image(d as i16)
-                }
-                Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::Up)) => {
-                    change_image(1)
-                }
-                Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::Down)) => {
-                    change_image(-1)
-                }
-                _ => (),
             }
-        }
+        });
+        //for ev in window.window().poll_events() {
+        //    use winit::{Event, VirtualKeyCode, ElementState, MouseScrollDelta, TouchPhase};
+        //    match ev {
+        //        Event::Closed => break 'run,
+        //        Event::KeyboardInput(_, _, Some(VirtualKeyCode::Escape)) => break 'run,
+        //        Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::F11)) => fullscreen_toggle = !fullscreen_toggle,
+        //        Event::Resized(width, height) => {
+        //            dimensions = [width, height];
+        //            rebuild_swapchain = true;
+        //            use_old_swapchain = true;
+        //        }
+        //        Event::MouseWheel(MouseScrollDelta::LineDelta(_, d), TouchPhase::Moved) => {
+        //            change_image(d as i16)
+        //        }
+        //        Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::Up)) => {
+        //            change_image(1)
+        //        }
+        //        Event::KeyboardInput(ElementState::Pressed, _, Some(VirtualKeyCode::Down)) => {
+        //            change_image(-1)
+        //        }
+        //        _ => (),
+        //    }
+        //}
         if fullscreen != fullscreen_toggle {
           fullscreen = fullscreen_toggle;
           if !fullscreen {
             dimensions = [art::MAP_WIDTH, art::MAP_HEIGHT];
           }
-          window = build_window(&instance, fullscreen, dimensions);
+          window = build_window(&events_loop, &instance, fullscreen, dimensions);
           rebuild_swapchain = true;
           use_old_swapchain = false;
         }
@@ -780,13 +911,15 @@ fn main() {
                 else {
                   None
                 };
-              create_swapchain(&device,
-                                      &window.surface(),
-                                      &caps,
-                                      &renderpass,
-                                      vulkano::sync::SharingMode::from(&queue),
-                                      dimensions,
-                                      old_swapchain)
+                let sc = create_swapchain(device.clone(),
+                    window.surface().clone(),
+                    &caps,
+                    vulkano::sync::SharingMode::from(&queue),
+                    dimensions,
+                    old_swapchain);
+                
+                let mut framebuffers = create_framebuffers(renderpass.clone(), sc.1);
+                (sc.0, framebuffers)
             };
             
             swapchain = sc.0;
