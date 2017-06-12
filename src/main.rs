@@ -1,6 +1,9 @@
 #[cfg(target_os = "android")]
 #[macro_use] extern crate android_glue;
 
+#[macro_use]
+extern crate vulkano_shader_derive;
+
 mod art;
 extern crate winit;
 extern crate rand;
@@ -91,7 +94,7 @@ fn create_framebuffers<Rp: vulkano::framebuffer::RenderPassAbstract>(renderpass:
                    ) -> Vec<Arc<vulkano::framebuffer::Framebuffer<Arc<Rp>, ((), std::sync::Arc<vulkano::image::SwapchainImage>)>>> {
     let framebuffers = images.iter()
         .map(|image| {
-            Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass)
+            Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass.clone())
                 .add(image.clone()).unwrap()
                 .build().unwrap())
         })
@@ -99,7 +102,7 @@ fn create_framebuffers<Rp: vulkano::framebuffer::RenderPassAbstract>(renderpass:
     framebuffers
 }
 
-fn build_window(events_loop: &winit::EventsLoop, instance: &Arc<vulkano::instance::Instance>, fullscreen: bool, resolution: [u32; 2]) -> vulkano_win::Window {
+fn build_window(events_loop: &winit::EventsLoop, instance: Arc<vulkano::instance::Instance>, fullscreen: bool, resolution: [u32; 2]) -> vulkano_win::Window {
   let mut window = winit::WindowBuilder::new()
     .with_title("Abstract Art".to_string())
     .with_dimensions(resolution[0], resolution[1]);
@@ -109,8 +112,7 @@ fn build_window(events_loop: &winit::EventsLoop, instance: &Arc<vulkano::instanc
   }
   let events_loop = winit::EventsLoop::new();
   window
-    .build_vk_surface(&events_loop, instance.clone())
-    .unwrap()
+    .build_vk_surface(&events_loop, instance).unwrap()
 }
 
 fn main() {
@@ -245,7 +247,7 @@ fn main() {
 
     let events_loop = winit::EventsLoop::new();
     let mut fullscreen = false;
-    let mut window = build_window(&events_loop, &instance, fullscreen, dimensions);
+    let mut window = build_window(&events_loop, instance.clone(), fullscreen, dimensions);
 
     let queue = physical.queue_families()
         .find(|q| q.supports_graphics() && window.surface().is_supported(*q).unwrap_or(false))
@@ -275,7 +277,7 @@ fn main() {
     //    .unwrap();
 
     let (mut swapchain, mut images) =
-        create_swapchain(device,
+        create_swapchain(device.clone(),
                          window.surface().clone(),
                          &caps,
                          vulkano::sync::SharingMode::from(&queue),
@@ -298,26 +300,27 @@ fn main() {
     ).unwrap());
     
     let mut framebuffers = create_framebuffers(renderpass.clone(), images);
-
+    
+    #[derive(Clone)]
+    struct Vertex {
+        position: [f32; 2],
+    }
+    impl_vertex!(Vertex, position);
+    
     let vertex_buffer = {
         use vulkano::buffer::cpu_access::CpuAccessibleBuffer;
         use vulkano::buffer::BufferUsage;
 
-        #[derive(Clone)]
-        struct Vertex {
-            position: [f32; 2],
-        }
-        impl_vertex!(Vertex, position);
 
-        CpuAccessibleBuffer::from_iter(device.clone(),
+        CpuAccessibleBuffer::<[Vertex]>::from_iter(device.clone(),
                                        BufferUsage::vertex_buffer(),
                                        Some(queue.family()),
-                                       [Vertex { position: [0., 0.] },
-                                        Vertex { position: [4., 0.] },
-                                        Vertex { position: [0., 4.] }]
-                                           .iter()
-                                           .cloned())
-            .expect("failed to create buffer")
+                                       [
+                                            Vertex { position: [0., 0.] },
+                                            Vertex { position: [4., 0.] },
+                                            Vertex { position: [0., 4.] },
+                                       ].iter().cloned()
+                                   ).expect("failed to create buffer")
     };
 
     let start_time = Instant::now();
@@ -522,8 +525,8 @@ fn main() {
 
     get_image(image_index);
 
-    let mut change_image = |i| {
-        let ni = i + image_index as i16;
+    let mut change_image = |i: i16| {
+        let ni: i16 = i + image_index as i16;
         if ni < 0 {
             image_index = art::BATTLE_GROUP_MAX - 1;
         } else if ni >= art::BATTLE_GROUP_MAX as i16 {
@@ -554,16 +557,16 @@ fn main() {
 
     // TODO: do this good
     let layer_framebuffers =
-        [vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+        [Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass.clone())
             //.with_dimensions([art::MAP_WIDTH, art::MAP_HEIGHT, 1])
             .add(art_tex[0].clone()).unwrap()
             .build()
-            .unwrap(),
-         vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+            .unwrap()),
+         Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass.clone())
             //.with_dimensions([art::MAP_WIDTH, art::MAP_HEIGHT, 1])
             .add(art_tex[1].clone()).unwrap()
             .build()
-            .unwrap()];
+            .unwrap())];
 
     let (map_texture, palette_texture) = {
         use vulkano::image::immutable::ImmutableImage;
@@ -575,16 +578,16 @@ fn main() {
                                  height: art::MAP_HEIGHT,
                              },
                              R8Unorm,
-                             Some(queue.family()))
-            .unwrap(),
+                             Some(queue.family())
+                        ).unwrap(),
          ImmutableImage::new(device.clone(),
                              Dimensions::Dim2d {
                                  width: art::PALETTE_MAX as u32,
                                  height: 8,
                              },
                              B5G5R5A1UnormPack16,
-                             Some(queue.family()))
-            .unwrap())
+                             Some(queue.family())
+                        ).unwrap())
     };
 
     let (map_sampler, palette_sampler) = {
@@ -632,33 +635,33 @@ fn main() {
     let art_pipeline = {
         let dim = map_texture.dimensions().width_height();
         Arc::new(vulkano::pipeline::GraphicsPipeline::new(device.clone(),
-      vulkano::pipeline::GraphicsPipelineParams {
-        vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
-        vertex_shader: draw_vs.main_entry_point(),
-        input_assembly: vulkano::pipeline::input_assembly::InputAssembly {
-            topology: vulkano::pipeline::input_assembly::PrimitiveTopology::TriangleStrip,
-            primitive_restart_enable: false,
-        },
-        tessellation: None,
-        geometry_shader: None,
-        viewport: vulkano::pipeline::viewport::ViewportsState::Fixed {
-          data: vec![(
-            vulkano::pipeline::viewport::Viewport {
-              origin: [0.0, 0.0],
-              depth_range: 0.0 .. 1.0,
-              dimensions: [dim[0] as f32, dim[1] as f32],
-            },
-            vulkano::pipeline::viewport::Scissor::irrelevant()
-          )]
-        },
-        raster: Default::default(),
-        multisample: vulkano::pipeline::multisample::Multisample::disabled(),
-        fragment_shader: aa_fs.main_entry_point(),
-        depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
-        blend: vulkano::pipeline::blend::Blend::pass_through(),
-        //layout: &art_pipeline_layout,
-        render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
-      }
+            vulkano::pipeline::GraphicsPipelineParams {
+                vertex_input: vulkano::pipeline::vertex::SingleBufferDefinition::new(),
+                vertex_shader: draw_vs.main_entry_point(),
+                input_assembly: vulkano::pipeline::input_assembly::InputAssembly {
+                    topology: vulkano::pipeline::input_assembly::PrimitiveTopology::TriangleStrip,
+                    primitive_restart_enable: false,
+                },
+                tessellation: None,
+                geometry_shader: None,
+                viewport: vulkano::pipeline::viewport::ViewportsState::Fixed {
+                    data: vec![(
+                        vulkano::pipeline::viewport::Viewport {
+                            origin: [0.0, 0.0],
+                            depth_range: 0.0 .. 1.0,
+                            dimensions: [dim[0] as f32, dim[1] as f32],
+                        },
+                        vulkano::pipeline::viewport::Scissor::irrelevant()
+                    )]
+                },
+                raster: Default::default(),
+                multisample: vulkano::pipeline::multisample::Multisample::disabled(),
+                fragment_shader: aa_fs.main_entry_point(),
+                depth_stencil: vulkano::pipeline::depth_stencil::DepthStencil::disabled(),
+                blend: vulkano::pipeline::blend::Blend::pass_through(),
+                //layout: &art_pipeline_layout,
+                render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
+            }
         ).unwrap())
     };
 
@@ -722,7 +725,7 @@ fn main() {
         bg4: (art_tex[1].clone(), map_sampler.clone()),
     }));
 
-    let art_pipeline = {
+    /*let art_pipeline = {
         let dim = map_texture.dimensions().width_height();
         Arc::new(vulkano::pipeline::GraphicsPipeline::new(device.clone(),
       vulkano::pipeline::GraphicsPipelineParams {
@@ -753,7 +756,7 @@ fn main() {
         render_pass: vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap(),
       }
   ).unwrap())
-    };
+    };*/
 
     /*let pipeline = {
       vulkano::pipeline::GraphicsPipeline::new(device.clone(), vulkano::pipeline::GraphicsPipelineParams {
@@ -793,7 +796,7 @@ fn main() {
         }
     };
     use vulkano::command_buffer::CommandBufferBuilder;
-    let build_command_buffers = |state: vulkano::command_buffer::DynamicState, framebuffers: &Vec<Arc<vulkano::framebuffer::Framebuffer<_, _>>>| framebuffers.iter().map(|framebuffer| {
+    let build_command_buffer = |state: vulkano::command_buffer::DynamicState, framebuffer: Arc<vulkano::framebuffer::Framebuffer<_, _>>| {
         use vulkano::buffer::BufferSlice;
         use vulkano::command_buffer::{AutoCommandBufferBuilder, DynamicState};
         let mut command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family()).unwrap();
@@ -827,12 +830,12 @@ fn main() {
                 vertex_buffer.clone(), set.clone(), ()).unwrap()
             .end_render_pass().unwrap()
             
-            .build()
-    }).collect::<Vec<_>>();
+            .build().unwrap()
+    };
 
-    let mut command_buffers = build_command_buffers(state, &framebuffers);
+    use vulkano::sync::GpuFuture;
 
-    let mut previous_frame = Box::new(vulkano::sync::now(device.clone())) as Box<vulkano::sync::GpuFuture>;
+    let mut previous_frame = Box::new(vulkano::sync::now(device.clone())) as Box<GpuFuture>;
 
     let mut running = true;
 
@@ -845,10 +848,12 @@ fn main() {
         }
 
         let (image_num, acquire_future) = vulkano::swapchain::acquire_next_image(swapchain.clone(),
-            Duration::new(2, 0)).unwrap();
+            Duration::new(10, 0)).unwrap();
+        
+        let mut command_buffer = build_command_buffer(state, framebuffers[image_num].clone());
         
         let future = previous_frame.join(acquire_future)
-            .then_execute(queue.clone(), command_buffers[image_num]).unwrap()
+            .then_execute(queue.clone(), command_buffer).unwrap()
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
             .then_signal_fence_and_flush().unwrap();
         
@@ -897,7 +902,7 @@ fn main() {
           if !fullscreen {
             dimensions = [art::MAP_WIDTH, art::MAP_HEIGHT];
           }
-          window = build_window(&events_loop, &instance, fullscreen, dimensions);
+          window = build_window(&events_loop, instance.clone(), fullscreen, dimensions);
           rebuild_swapchain = true;
           use_old_swapchain = false;
         }
@@ -938,7 +943,6 @@ fn main() {
                 line_width: None,
             }
         };
-        command_buffers = build_command_buffers(state, &framebuffers);
       
     }
 }

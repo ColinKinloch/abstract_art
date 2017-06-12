@@ -20,6 +20,8 @@ rand = "0.3"
 
 android_glue = "0.2"
 
+vulkano-shader-derive = "0.4"
+
 [build-dependencies]
 vk-sys = "0.2"
 vulkano-shaders = "0.4"

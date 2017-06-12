@@ -17,6 +17,10 @@ pub const BG_BANK: &'static [u8] = include_bytes!("bgbank.bin");
 
 pub mod draw_vs {
     include!{concat!(env!("OUT_DIR"), "/shaders/src/art/draw.glslv")}
+    //#[derive(VulkanoShader)]
+    //#[ty = "vertex"]
+    //#[path = "art/draw.glslv"]
+    //struct Dummy;
 }
 pub mod aa_fs {
     include!{concat!(env!("OUT_DIR"), "/shaders/src/art/abstract_art.glslf")}
